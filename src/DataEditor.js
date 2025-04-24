@@ -1,37 +1,32 @@
-import React, { PureComponent } from 'react';
 import PropTypes from 'prop-types';
+import React, { memo, useEffect, useRef } from 'react';
 
 import CellShape from './CellShape';
 
-export default class DataEditor extends PureComponent {
-  constructor(props) {
-    super(props);
-    this.handleChange = this.handleChange.bind(this);
-  }
+const DataEditor = memo(props => {
+  const { value, onChange, onKeyDown } = props;
+  const inputRef = useRef(null);
 
-  componentDidMount() {
-    this._input.focus();
-  }
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, []);
 
-  handleChange(e) {
-    this.props.onChange(e.target.value);
-  }
+  const handleChange = e => {
+    onChange(e.target.value);
+  };
 
-  render() {
-    const { value, onKeyDown } = this.props;
-    return (
-      <input
-        ref={input => {
-          this._input = input;
-        }}
-        className="data-editor"
-        value={value}
-        onChange={this.handleChange}
-        onKeyDown={onKeyDown}
-      />
-    );
-  }
-}
+  return (
+    <input
+      ref={inputRef}
+      className="data-editor"
+      value={value}
+      onChange={handleChange}
+      onKeyDown={onKeyDown}
+    />
+  );
+});
 
 DataEditor.propTypes = {
   value: PropTypes.node.isRequired,
@@ -43,3 +38,7 @@ DataEditor.propTypes = {
   onRevert: PropTypes.func.isRequired,
   onKeyDown: PropTypes.func.isRequired,
 };
+
+DataEditor.displayName = 'DataEditor';
+
+export default DataEditor;
