@@ -55,7 +55,7 @@ function widthStyle(cell: CellShape): React.CSSProperties | undefined {
   return width ? { width } : undefined;
 }
 
-interface DataCellProps {
+export interface DataCellProps {
   row: number;
   col: number;
   cell: CellShape;
@@ -138,6 +138,8 @@ const DataCell: React.FC<DataCellProps> = memo(props => {
   const [reverting, setReverting] = useState<boolean>(false);
   const [committing, setCommitting] = useState<boolean>(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const prevCellRef = useRef<CellShape>();
+  const prevEditingRef = useRef(editing);
 
   useEffect(() => {
     if (editing) {
@@ -151,7 +153,10 @@ const DataCell: React.FC<DataCellProps> = memo(props => {
   }, [editing, clearing, props]);
 
   useEffect(() => {
+    const wasEditing = prevEditingRef.current;
+
     if (
+      wasEditing &&
       !editing &&
       !reverting &&
       !committing &&
@@ -159,11 +164,29 @@ const DataCell: React.FC<DataCellProps> = memo(props => {
     ) {
       onChange(row, col, value);
     }
+
+    prevEditingRef.current = editing;
   }, [editing, reverting, committing, value, onChange, row, col, props]);
 
   useEffect(() => {
-    // This is a placeholder for the original logic that was removed
-  }, [props]);
+    if (
+      prevCellRef.current &&
+      !cell.disableUpdatedFlag &&
+      cell.value !== prevCellRef.current.value &&
+      !editing &&
+      !clearing
+    ) {
+      setUpdated(true);
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      timeoutRef.current = setTimeout(() => {
+        setUpdated(false);
+        timeoutRef.current = null;
+      }, 700);
+    }
+    prevCellRef.current = cell;
+  }, [cell, editing, clearing]);
 
   useEffect(() => {
     return () => {
@@ -287,10 +310,42 @@ const DataCell: React.FC<DataCellProps> = memo(props => {
       attributesRenderer={attributesRenderer}
       className={className}
       style={widthStyle(cell)}
-      onMouseDown={onMouseDown}
-      onMouseOver={onMouseOver}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
+      onMouseDown={(
+        r: number,
+        c: number,
+        e: React.MouseEvent<HTMLTableCellElement>,
+      ) => {
+        if (!cell.disableEvents) {
+          onMouseDown(r, c, e);
+        }
+      }}
+      onMouseOver={(
+        r: number,
+        c: number,
+        e?: React.MouseEvent<HTMLTableCellElement>,
+      ) => {
+        if (!cell.disableEvents) {
+          onMouseOver(r, c, e);
+        }
+      }}
+      onDoubleClick={(
+        r: number,
+        c: number,
+        e?: React.MouseEvent<HTMLTableCellElement>,
+      ) => {
+        if (!cell.disableEvents) {
+          onDoubleClick(r, c, e);
+        }
+      }}
+      onContextMenu={(
+        e: React.MouseEvent<HTMLTableCellElement>,
+        r: number,
+        c: number,
+      ) => {
+        if (!cell.disableEvents) {
+          onContextMenu(e, r, c);
+        }
+      }}
       onKeyUp={onKeyUp}
     >
       {content}
