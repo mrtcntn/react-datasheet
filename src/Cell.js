@@ -1,45 +1,45 @@
-import React, { PureComponent } from 'react';
 import PropTypes from 'prop-types';
+import React, { memo } from 'react';
 import CellShape from './CellShape';
 
-export default class Cell extends PureComponent {
-  render() {
-    const {
-      cell,
-      row,
-      col,
-      attributesRenderer,
-      className,
-      style,
-      onMouseDown,
-      onMouseOver,
-      onDoubleClick,
-      onContextMenu,
-    } = this.props;
+const Cell = memo(props => {
+  const {
+    cell,
+    row,
+    col,
+    attributesRenderer = () => {},
+    className,
+    style,
+    selected,
+    editing,
+    updated,
+    onMouseDown,
+    onMouseOver,
+    onDoubleClick,
+    onContextMenu,
+    children,
+  } = props;
 
-    const { colSpan, rowSpan } = cell;
-    const attributes = attributesRenderer
-      ? attributesRenderer(cell, row, col)
-      : {};
+  const { colSpan, rowSpan } = cell;
+  const attributes = attributesRenderer(cell, row, col) || {};
 
-    return (
-      <td
-        className={className}
-        onMouseDown={onMouseDown}
-        onMouseOver={onMouseOver}
-        onDoubleClick={onDoubleClick}
-        onTouchEnd={onDoubleClick}
-        onContextMenu={onContextMenu}
-        colSpan={colSpan}
-        rowSpan={rowSpan}
-        style={style}
-        {...attributes}
-      >
-        {this.props.children}
-      </td>
-    );
-  }
-}
+  return (
+    <td
+      className={className}
+      onMouseDown={onMouseDown}
+      onMouseOver={onMouseOver}
+      onDoubleClick={onDoubleClick}
+      onTouchEnd={onDoubleClick}
+      onContextMenu={onContextMenu}
+      colSpan={colSpan}
+      rowSpan={rowSpan}
+      style={style}
+      {...attributes}
+    >
+      {children}
+    </td>
+  );
+});
 
 Cell.propTypes = {
   row: PropTypes.number.isRequired,
@@ -55,6 +55,7 @@ Cell.propTypes = {
   onContextMenu: PropTypes.func.isRequired,
   className: PropTypes.string,
   style: PropTypes.object,
+  children: PropTypes.node,
 };
 
 Cell.defaultProps = {
@@ -63,3 +64,7 @@ Cell.defaultProps = {
   updated: false,
   attributesRenderer: () => {},
 };
+
+Cell.displayName = 'Cell';
+
+export default Cell;
