@@ -1,3 +1,8 @@
-export default Sheet;
-declare const Sheet: React.NamedExoticComponent<object>;
 import React from 'react';
+interface SheetProps {
+    className?: string;
+    data: any[][];
+    children?: React.ReactNode;
+}
+declare const Sheet: React.FC<SheetProps>;
+export default Sheet;
