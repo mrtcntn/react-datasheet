@@ -1,24 +1,24 @@
-import React, { PureComponent } from 'react';
 import PropTypes from 'prop-types';
-import Sheet from './Sheet';
-import Row from './Row';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import Cell from './Cell';
 import DataCell from './DataCell';
 import DataEditor from './DataEditor';
+import Row from './Row';
+import Sheet from './Sheet';
 import ValueViewer from './ValueViewer';
 import {
-  TAB_KEY,
-  ENTER_KEY,
-  DELETE_KEY,
-  ESCAPE_KEY,
   BACKSPACE_KEY,
-  LEFT_KEY,
-  UP_KEY,
+  DELETE_KEY,
   DOWN_KEY,
+  ENTER_KEY,
+  ESCAPE_KEY,
+  LEFT_KEY,
   RIGHT_KEY,
+  TAB_KEY,
+  UP_KEY,
 } from './keys';
 
-const isEmpty = obj => Object.keys(obj).length === 0;
+const isEmpty = obj => !obj || Object.keys(obj).length === 0;
 
 const range = (start, end) => {
   const array = [];
@@ -33,702 +33,869 @@ const defaultParsePaste = str => {
   return str.split(/\r\n|\n|\r/).map(row => row.split('\t'));
 };
 
-export default class DataSheet extends PureComponent {
-  constructor(props) {
-    super(props);
-    this.onMouseDown = this.onMouseDown.bind(this);
-    this.onMouseUp = this.onMouseUp.bind(this);
-    this.onMouseOver = this.onMouseOver.bind(this);
-    this.onDoubleClick = this.onDoubleClick.bind(this);
-    this.onContextMenu = this.onContextMenu.bind(this);
-    this.handleNavigate = this.handleNavigate.bind(this);
-    this.handleKey = this.handleKey.bind(this).bind(this);
-    this.handleCut = this.handleCut.bind(this);
-    this.handleCopy = this.handleCopy.bind(this);
-    this.handlePaste = this.handlePaste.bind(this);
-    this.pageClick = this.pageClick.bind(this);
-    this.onChange = this.onChange.bind(this);
-    this.onRevert = this.onRevert.bind(this);
-    this.isSelected = this.isSelected.bind(this);
-    this.isEditing = this.isEditing.bind(this);
-    this.isClearing = this.isClearing.bind(this);
-    this.handleComponentKey = this.handleComponentKey.bind(this);
+const defaultState = {
+  start: {},
+  end: {},
+  selecting: false,
+  forceEdit: false,
+  editing: {},
+  clear: {},
+};
 
-    this.handleKeyboardCellMovement =
-      this.handleKeyboardCellMovement.bind(this);
+// Helper to check if selection is controlled
+const isSelectionControlled = props => 'selected' in props;
 
-    this.defaultState = {
-      start: {},
-      end: {},
-      selecting: false,
-      forceEdit: false,
-      editing: {},
-      clear: {},
-    };
-    this.state = this.defaultState;
-
-    this.removeAllListeners = this.removeAllListeners.bind(this);
-    this.handleIEClipboardEvents = this.handleIEClipboardEvents.bind(this);
+// Helper to get state, merging controlled selection if necessary
+const getCurrentState = (internalState, props) => {
+  let state = { ...internalState };
+  if (isSelectionControlled(props)) {
+    let { start, end } = props.selected || {};
+    start = start || defaultState.start;
+    end = end || defaultState.end;
+    state = { ...state, start, end };
   }
+  return state;
+};
 
-  removeAllListeners() {
-    document.removeEventListener('mousedown', this.pageClick);
-    document.removeEventListener('mouseup', this.onMouseUp);
-    document.removeEventListener('cut', this.handleCut);
-    document.removeEventListener('copy', this.handleCopy);
-    document.removeEventListener('paste', this.handlePaste);
-    document.removeEventListener('keydown', this.handleIEClipboardEvents);
-  }
+const DataSheet = memo(props => {
+  const {
+    data,
+    className,
+    overflow,
+    valueRenderer,
+    dataRenderer,
+    sheetRenderer: SheetRenderer = Sheet,
+    rowRenderer: RowRenderer = Row,
+    cellRenderer = Cell,
+    valueViewer = ValueViewer,
+    dataEditor = DataEditor,
+    attributesRenderer,
+    keyFn,
+    handleCopy,
+    parsePaste = defaultParsePaste,
+    onCellsChanged,
+    onChange,
+    onContextMenu,
+    onSelect,
+    onPaste,
+    isCellNavigable = () => true,
+    selected: selectedProp, // Rename to avoid conflict with internal state
+    disablePageClick = false,
+    editModeChanged,
+  } = props;
 
-  componentDidMount() {
-    // Add listener scoped to the DataSheet that catches otherwise unhandled
-    // keyboard events when displaying components
-    this.dgDom &&
-      this.dgDom.addEventListener('keydown', this.handleComponentKey);
-  }
+  const [internalState, setInternalState] = useState(defaultState);
+  const dgDomRef = useRef(null);
+  const cellRefs = useRef({}); // To store refs for individual cells if needed, e.g., for focusing
 
-  componentWillUnmount() {
-    this.dgDom &&
-      this.dgDom.removeEventListener('keydown', this.handleComponentKey);
-    this.removeAllListeners();
-  }
+  // Get derived state (handles controlled selection)
+  const currentState = getCurrentState(internalState, props);
+  const { start, end, selecting, forceEdit, editing, clear } = currentState;
 
-  isSelectionControlled() {
-    return 'selected' in this.props;
-  }
-
-  getState() {
-    let state = this.state;
-    if (this.isSelectionControlled()) {
-      let { start, end } = this.props.selected || {};
-      start = start || this.defaultState.start;
-      end = end || this.defaultState.end;
-      state = { ...state, start, end };
-    }
-    return state;
-  }
-
-  _setState(state) {
-    const { editModeChanged } = this.props;
-    if (editModeChanged && state.editing) {
-      const wasEditing = !isEmpty(this.state.editing);
-      const wilBeEditing = !isEmpty(state.editing);
-      if (wasEditing != wilBeEditing) {
-        editModeChanged(wilBeEditing);
+  // Custom setState logic to handle controlled props
+  const setStateProxy = useCallback(
+    newState => {
+      if (editModeChanged && newState.editing) {
+        const wasEditing = !isEmpty(internalState.editing);
+        const willBeEditing = !isEmpty(newState.editing);
+        if (wasEditing !== willBeEditing) {
+          editModeChanged(willBeEditing);
+        }
       }
-    }
-    if (this.isSelectionControlled() && ('start' in state || 'end' in state)) {
-      let { start, end, ...rest } = state;
-      let { selected, onSelect } = this.props;
-      selected = selected || {};
-      if (!start) {
-        start = 'start' in selected ? selected.start : this.defaultState.start;
+
+      let update = {};
+      let selectionUpdate = {};
+
+      for (const key in newState) {
+        if (key === 'start' || key === 'end') {
+          selectionUpdate[key] = newState[key];
+        } else {
+          update[key] = newState[key];
+        }
       }
-      if (!end) {
-        end = 'end' in selected ? selected.end : this.defaultState.end;
-      }
-      onSelect && onSelect({ start, end });
-      this.setState(rest);
-    } else {
-      this.setState(state);
-    }
-  }
 
-  pageClick(e) {
-    if (this.props.disablePageClick) return;
-    const element = this.dgDom;
-    if (!element.contains(e.target)) {
-      this.setState(this.defaultState);
-      this.removeAllListeners();
-    }
-  }
-
-  handleCut(e) {
-    if (isEmpty(this.state.editing)) {
-      e.preventDefault();
-      this.handleCopy(e);
-      const { start, end } = this.getState();
-      this.clearSelectedCells(start, end);
-    }
-  }
-
-  handleIEClipboardEvents(e) {
-    if (e.ctrlKey) {
-      if (e.keyCode === 67) {
-        // C - copy
-        this.handleCopy(e);
-      } else if (e.keyCode === 88) {
-        // X - cut
-        this.handleCut(e);
-      } else if (e.keyCode === 86 || e.which === 86) {
-        // P - patse
-        this.handlePaste(e);
-      }
-    }
-  }
-
-  handleCopy(e) {
-    if (isEmpty(this.state.editing)) {
-      e.preventDefault();
-      const { dataRenderer, valueRenderer, data } = this.props;
-      const { start, end } = this.getState();
-
-      if (this.props.handleCopy) {
-        this.props.handleCopy({
-          event: e,
-          dataRenderer,
-          valueRenderer,
-          data,
-          start,
-          end,
-          range,
-        });
+      if (isSelectionControlled(props)) {
+        if (Object.keys(selectionUpdate).length > 0) {
+          let currentSelection = props.selected || {};
+          let nextSelectionStart =
+            selectionUpdate.start !== undefined
+              ? selectionUpdate.start
+              : currentSelection.start || defaultState.start;
+          let nextSelectionEnd =
+            selectionUpdate.end !== undefined
+              ? selectionUpdate.end
+              : currentSelection.end || defaultState.end;
+          if (onSelect) {
+            onSelect({ start: nextSelectionStart, end: nextSelectionEnd });
+          }
+        }
+        // Only update internal state for non-selection properties
+        if (Object.keys(update).length > 0) {
+          setInternalState(prevState => ({ ...prevState, ...update }));
+        }
       } else {
-        const text = range(start.i, end.i)
-          .map(i =>
-            range(start.j, end.j)
-              .map(j => {
-                const cell = data[i][j];
-                const value = dataRenderer ? dataRenderer(cell, i, j) : null;
-                if (
-                  value === '' ||
-                  value === null ||
-                  typeof value === 'undefined'
-                ) {
-                  return valueRenderer(cell, i, j);
-                }
-                return value;
-              })
-              .join('\t'),
-          )
-          .join('\n');
-        if (window.clipboardData && window.clipboardData.setData) {
-          window.clipboardData.setData('Text', text);
-        } else {
-          e.clipboardData.setData('text/plain', text);
-        }
+        // Uncontrolled: update everything
+        setInternalState(prevState => ({ ...prevState, ...newState }));
       }
-    }
-  }
+    },
+    [props, internalState, editModeChanged, onSelect],
+  ); // Dependencies updated
 
-  handlePaste(e) {
-    if (isEmpty(this.state.editing)) {
-      let { start, end } = this.getState();
+  const removeAllListeners = useCallback(() => {
+    document.removeEventListener('mousedown', pageClick);
+    document.removeEventListener('mouseup', onMouseUp);
+    document.removeEventListener('cut', handleCutInternal);
+    document.removeEventListener('copy', handleCopyInternal);
+    document.removeEventListener('paste', handlePasteInternal);
+    document.removeEventListener('keydown', handleIEClipboardEvents);
+  }, []); // Dependencies will be added by linting rule if necessary
 
-      start = { i: Math.min(start.i, end.i), j: Math.min(start.j, end.j) };
-      end = { i: Math.max(start.i, end.i), j: Math.max(start.j, end.j) };
-
-      const parse = this.props.parsePaste || defaultParsePaste;
-      const changes = [];
-      let pasteData = [];
-      if (window.clipboardData && window.clipboardData.getData) {
-        // IE
-        pasteData = parse(window.clipboardData.getData('Text'));
-      } else if (e.clipboardData && e.clipboardData.getData) {
-        pasteData = parse(e.clipboardData.getData('text/plain'));
+  const pageClick = useCallback(
+    e => {
+      if (disablePageClick) return;
+      const element = dgDomRef.current;
+      // Check if dgDomRef.current exists before calling contains
+      if (element && !element.contains(e.target)) {
+        setStateProxy(defaultState);
+        removeAllListeners();
       }
+    },
+    [disablePageClick, removeAllListeners, setStateProxy],
+  );
 
-      // in order of preference
-      const { data, onCellsChanged, onPaste, onChange } = this.props;
-      if (onCellsChanged) {
-        const additions = [];
-        pasteData.forEach((row, i) => {
-          row.forEach((value, j) => {
-            end = { i: start.i + i, j: start.j + j };
-            const cell = data[end.i] && data[end.i][end.j];
-            if (!cell) {
-              additions.push({ row: end.i, col: end.j, value });
-            } else if (!cell.readOnly) {
-              changes.push({ cell, row: end.i, col: end.j, value });
-            }
-          });
-        });
-        if (additions.length) {
-          onCellsChanged(changes, additions);
-        } else {
-          onCellsChanged(changes);
-        }
-      } else if (onPaste) {
-        pasteData.forEach((row, i) => {
-          const rowData = [];
-          row.forEach((pastedData, j) => {
-            end = { i: start.i + i, j: start.j + j };
-            const cell = data[end.i] && data[end.i][end.j];
-            rowData.push({ cell: cell, data: pastedData });
-          });
-          changes.push(rowData);
-        });
-        onPaste(changes);
-      } else if (onChange) {
-        pasteData.forEach((row, i) => {
-          row.forEach((value, j) => {
-            end = { i: start.i + i, j: start.j + j };
-            const cell = data[end.i] && data[end.i][end.j];
-            if (cell && !cell.readOnly) {
-              onChange(cell, end.i, end.j, value);
-            }
-          });
-        });
-      }
-      this._setState({ end });
-    }
-  }
-
-  handleKeyboardCellMovement(e, commit = false) {
-    const { start, editing } = this.getState();
-    const { data } = this.props;
-    const isEditing = editing && !isEmpty(editing);
-    const currentCell = data[start.i] && data[start.i][start.j];
-
-    if (isEditing && !commit) {
-      return false;
-    }
-    const hasComponent = currentCell && currentCell.component;
-
-    const keyCode = e.which || e.keyCode;
-
-    if (hasComponent && isEditing) {
-      e.preventDefault();
-      return;
-    }
-
-    if (keyCode === TAB_KEY) {
-      this.handleNavigate(e, { i: 0, j: e.shiftKey ? -1 : 1 }, true);
-    } else if (keyCode === RIGHT_KEY) {
-      this.handleNavigate(e, { i: 0, j: 1 });
-    } else if (keyCode === LEFT_KEY) {
-      this.handleNavigate(e, { i: 0, j: -1 });
-    } else if (keyCode === UP_KEY) {
-      this.handleNavigate(e, { i: -1, j: 0 });
-    } else if (keyCode === DOWN_KEY) {
-      this.handleNavigate(e, { i: 1, j: 0 });
-    } else if (commit && keyCode === ENTER_KEY) {
-      this.handleNavigate(e, { i: e.shiftKey ? -1 : 1, j: 0 });
-    }
-  }
-
-  handleKey(e) {
-    if (e.isPropagationStopped && e.isPropagationStopped()) {
-      return;
-    }
-    const keyCode = e.which || e.keyCode;
-    const { start, end, editing } = this.getState();
-    const isEditing = editing && !isEmpty(editing);
-    const noCellsSelected = !start || isEmpty(start);
-    const ctrlKeyPressed = e.ctrlKey || e.metaKey;
-    const deleteKeysPressed =
-      keyCode === DELETE_KEY || keyCode === BACKSPACE_KEY;
-    const enterKeyPressed = keyCode === ENTER_KEY;
-    const numbersPressed = keyCode >= 48 && keyCode <= 57;
-    const lettersPressed = keyCode >= 65 && keyCode <= 90;
-    const latin1Supplement = keyCode >= 160 && keyCode <= 255;
-    const numPadKeysPressed = keyCode >= 96 && keyCode <= 105;
-    const currentCell = !noCellsSelected && this.props.data[start.i][start.j];
-    const equationKeysPressed =
-      [
-        187 /* equal */, 189 /* substract */, 190 /* period */, 107 /* add */,
-        109 /* decimal point */, 110,
-      ].indexOf(keyCode) > -1;
-
-    if (noCellsSelected || ctrlKeyPressed) {
-      return true;
-    }
-
-    if (!isEditing) {
-      this.handleKeyboardCellMovement(e);
-      if (deleteKeysPressed) {
+  // Internal handlers wrapped in useCallback
+  const handleCutInternal = useCallback(
+    e => {
+      if (isEmpty(editing)) {
         e.preventDefault();
-        this.clearSelectedCells(start, end);
-      } else if (currentCell && !currentCell.readOnly) {
-        if (enterKeyPressed) {
-          this._setState({ editing: start, clear: {}, forceEdit: true });
-          e.preventDefault();
-        } else if (
-          numbersPressed ||
-          numPadKeysPressed ||
-          lettersPressed ||
-          latin1Supplement ||
-          equationKeysPressed
-        ) {
-          // empty out cell if user starts typing without pressing enter
-          this._setState({ editing: start, clear: start, forceEdit: false });
+        handleCopyInternal(e); // Use internal copy handler
+        const { start: currentStart, end: currentEnd } = getCurrentState(
+          internalState,
+          props,
+        ); // Get current state
+        // eslint-disable-next-line no-use-before-define
+        clearSelectedCells(currentStart, currentEnd);
+      }
+    },
+    [editing, props, internalState, setStateProxy],
+  ); // Added dependencies
+
+  const handleIEClipboardEvents = useCallback(
+    e => {
+      if (e.ctrlKey) {
+        if (e.keyCode === 67) {
+          handleCopyInternal(e);
+        } else if (e.keyCode === 88) {
+          handleCutInternal(e);
+        } else if (e.keyCode === 86 || e.which === 86) {
+          handlePasteInternal(e);
         }
       }
-    }
-  }
+    },
+    [handleCopyInternal, handleCutInternal, handlePasteInternal],
+  ); // Added dependencies
 
-  getSelectedCells(data, start, end) {
+  const handleCopyInternal = useCallback(
+    e => {
+      if (isEmpty(editing)) {
+        e.preventDefault();
+        const { start: currentStart, end: currentEnd } = getCurrentState(
+          internalState,
+          props,
+        ); // Get current state
+
+        if (handleCopy) {
+          handleCopy({
+            event: e,
+            dataRenderer,
+            valueRenderer,
+            data,
+            start: currentStart,
+            end: currentEnd,
+            range,
+          });
+        } else {
+          const text = range(currentStart.i, currentEnd.i)
+            .map(i =>
+              range(currentStart.j, currentEnd.j)
+                .map(j => {
+                  const cell = data[i]?.[j]; // Safely access cell
+                  if (!cell) return ''; // Handle undefined cell
+                  const value = dataRenderer ? dataRenderer(cell, i, j) : null;
+                  if (
+                    value === '' ||
+                    value === null ||
+                    typeof value === 'undefined'
+                  ) {
+                    return valueRenderer(cell, i, j);
+                  }
+                  return value;
+                })
+                .join('\t'),
+            )
+            .join('\n');
+
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard
+                .writeText(text)
+                .catch(err =>
+                  console.error('Async clipboard write failed:', err),
+                );
+            } else if (window.clipboardData && window.clipboardData.setData) {
+              // IE specific method.
+              window.clipboardData.setData('Text', text);
+            } else if (e.clipboardData && e.clipboardData.setData) {
+              e.clipboardData.setData('text/plain', text);
+            }
+          } catch (err) {
+            console.error('Clipboard API failed:', err);
+          }
+        }
+      }
+    },
+    [
+      editing,
+      props,
+      internalState,
+      handleCopy,
+      dataRenderer,
+      valueRenderer,
+      data,
+    ],
+  ); // Added dependencies
+
+  const handlePasteInternal = useCallback(
+    async e => {
+      if (isEmpty(editing)) {
+        e.preventDefault();
+        let { start: currentStart, end: currentEnd } = getCurrentState(
+          internalState,
+          props,
+        );
+
+        currentStart = {
+          i: Math.min(currentStart.i, currentEnd.i),
+          j: Math.min(currentStart.j, currentEnd.j),
+        };
+        // currentEnd will be updated dynamically based on pasted data size
+
+        let pastedText = '';
+        try {
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            pastedText = await navigator.clipboard.readText();
+          } else if (window.clipboardData && window.clipboardData.getData) {
+            pastedText = window.clipboardData.getData('Text');
+          } else if (e.clipboardData && e.clipboardData.getData) {
+            pastedText = e.clipboardData.getData('text/plain');
+          }
+        } catch (err) {
+          console.error('Clipboard read failed:', err);
+          return;
+        }
+
+        const pasteData = parsePaste(pastedText);
+        const changes = [];
+        let newEnd = { ...currentStart }; // Initialize newEnd
+
+        if (onCellsChanged) {
+          const additions = [];
+          pasteData.forEach((row, i) => {
+            row.forEach((value, j) => {
+              const targetRow = currentStart.i + i;
+              const targetCol = currentStart.j + j;
+              newEnd = { i: targetRow, j: targetCol }; // Update end based on pasted data size
+              const cell = data[targetRow]?.[targetCol];
+              if (!cell) {
+                additions.push({ row: targetRow, col: targetCol, value });
+              } else if (!cell.readOnly) {
+                changes.push({ cell, row: targetRow, col: targetCol, value });
+              }
+            });
+          });
+          if (additions.length) {
+            onCellsChanged(changes, additions);
+          } else {
+            onCellsChanged(changes);
+          }
+        } else if (onPaste) {
+          const structuredChanges = [];
+          pasteData.forEach((row, i) => {
+            const rowData = [];
+            row.forEach((pastedValue, j) => {
+              const targetRow = currentStart.i + i;
+              const targetCol = currentStart.j + j;
+              newEnd = { i: targetRow, j: targetCol }; // Update end
+              const cell = data[targetRow]?.[targetCol];
+              rowData.push({ cell: cell, data: pastedValue });
+            });
+            structuredChanges.push(rowData);
+          });
+          onPaste(structuredChanges);
+        } else if (onChange) {
+          pasteData.forEach((row, i) => {
+            row.forEach((value, j) => {
+              const targetRow = currentStart.i + i;
+              const targetCol = currentStart.j + j;
+              newEnd = { i: targetRow, j: targetCol }; // Update end
+              const cell = data[targetRow]?.[targetCol];
+              if (cell && !cell.readOnly) {
+                onChange(cell, targetRow, targetCol, value);
+              }
+            });
+          });
+        }
+        // Update selection to cover pasted area
+        setStateProxy({ start: currentStart, end: newEnd });
+      }
+    },
+    [
+      editing,
+      props,
+      internalState,
+      parsePaste,
+      onCellsChanged,
+      onPaste,
+      onChange,
+      data,
+      setStateProxy,
+    ],
+  );
+
+  const onRevert = useCallback(() => {
+    setStateProxy({ editing: {} });
+    setTimeout(() => {
+      if (dgDomRef.current) {
+        dgDomRef.current.focus({ preventScroll: true });
+      }
+    }, 1);
+  }, [setStateProxy]);
+
+  const clearSelectedCells = useCallback(
+    (startCell, endCell) => {
+      const cellsToClear = getSelectedCells(data, startCell, endCell)
+        .filter(({ cell }) => !cell.readOnly)
+        .map(({ cell, row, col }) => ({ cell, row, col, value: '' }));
+
+      if (onCellsChanged) {
+        onCellsChanged(cellsToClear);
+        onRevert(); // Revert editing mode after clearing
+      } else if (onChange) {
+        setTimeout(() => {
+          cellsToClear.forEach(({ cell, row, col, value }) => {
+            onChange(cell, row, col, value);
+          });
+          onRevert(); // Revert editing mode after clearing
+        }, 0);
+      }
+    },
+    [data, onCellsChanged, onChange, onRevert],
+  );
+
+  // Handlers for DataCell
+  const handleCellMouseDown = useCallback(
+    (i, j, e) => {
+      const currentSelectionState = getCurrentState(internalState, props);
+      const isEditingSameCell =
+        !isEmpty(currentSelectionState.editing) &&
+        currentSelectionState.editing.i === i &&
+        currentSelectionState.editing.j === j;
+      const newEditingState =
+        isEmpty(currentSelectionState.editing) ||
+        currentSelectionState.editing.i !== i ||
+        currentSelectionState.editing.j !== j
+          ? {}
+          : currentSelectionState.editing;
+
+      setStateProxy({
+        selecting: !isEditingSameCell,
+        start: e.shiftKey ? currentSelectionState.start : { i, j },
+        end: { i, j },
+        editing: newEditingState,
+        forceEdit: !!isEditingSameCell,
+      });
+
+      // Add listeners dynamically
+      document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener('mousedown', pageClick);
+      document.addEventListener('cut', handleCutInternal);
+      document.addEventListener('copy', handleCopyInternal);
+      document.addEventListener('paste', handlePasteInternal);
+      // IE specific listener
+      if (/MSIE|Trident/.test(window.navigator.userAgent)) {
+        document.addEventListener('keydown', handleIEClipboardEvents);
+      }
+    },
+    [
+      internalState,
+      props,
+      setStateProxy,
+      pageClick,
+      handleCutInternal,
+      handleCopyInternal,
+      handlePasteInternal,
+      handleIEClipboardEvents,
+    ],
+  );
+
+  const handleCellMouseOver = useCallback(
+    (i, j) => {
+      if (internalState.selecting && isEmpty(internalState.editing)) {
+        // Use internal state directly here
+        setStateProxy({ end: { i, j } });
+      }
+    },
+    [internalState.selecting, internalState.editing, setStateProxy],
+  );
+
+  const handleCellDoubleClick = useCallback(
+    (i, j) => {
+      const cell = data[i]?.[j];
+      if (cell && !cell.readOnly) {
+        setStateProxy({ editing: { i, j }, forceEdit: true, clear: {} });
+      }
+    },
+    [data, setStateProxy],
+  );
+
+  const handleCellContextMenu = useCallback(
+    (evt, i, j) => {
+      const cell = data[i]?.[j];
+      if (onContextMenu && cell) {
+        onContextMenu(evt, cell, i, j);
+      }
+    },
+    [data, onContextMenu],
+  );
+
+  const handleCellChange = useCallback(
+    (row, col, value) => {
+      if (onCellsChanged) {
+        onCellsChanged([{ cell: data[row]?.[col], row, col, value }]);
+      } else if (onChange) {
+        onChange(data[row]?.[col], row, col, value);
+      }
+      onRevert(); // Exit editing mode after change
+    },
+    [data, onChange, onCellsChanged, onRevert],
+  );
+
+  const searchForNextSelectablePos = useCallback(
+    (currentStart, offsets, jumpRow) => {
+      const isCellDefined = ({ i, j }) => data[i]?.[j] !== undefined;
+      const previousRow = location => ({
+        i: location.i - 1,
+        j: data[0].length - 1,
+      });
+      const nextRow = location => ({ i: location.i + 1, j: 0 });
+      const advanceOffset = location => ({
+        i: location.i + offsets.i,
+        j: location.j + offsets.j,
+      });
+
+      let newLocation = advanceOffset(currentStart);
+
+      while (isCellDefined(newLocation)) {
+        const cell = data[newLocation.i][newLocation.j];
+        if (isCellNavigable(cell, newLocation.i, newLocation.j)) {
+          break; // Found navigable cell
+        }
+        newLocation = advanceOffset(newLocation);
+      }
+
+      if (!isCellDefined(newLocation)) {
+        if (!jumpRow) return null;
+        newLocation =
+          offsets.j < 0 ? previousRow(newLocation) : nextRow(newLocation);
+      }
+
+      if (!isCellDefined(newLocation)) return null; // No navigable cell found
+
+      // Final check if the landing cell (after row jump) is navigable
+      const finalCell = data[newLocation.i][newLocation.j];
+      if (!isCellNavigable(finalCell, newLocation.i, newLocation.j)) {
+        // Recursively search from the new position
+        return searchForNextSelectablePos(newLocation, offsets, jumpRow);
+      }
+
+      return newLocation;
+    },
+    [data, isCellNavigable],
+  );
+
+  const updateLocationSingleCell = useCallback(
+    location => {
+      setStateProxy({
+        start: location,
+        end: location,
+        editing: {},
+      });
+    },
+    [setStateProxy],
+  );
+
+  const updateLocationMultipleCells = useCallback(
+    offsets => {
+      const { start: currentStart, end: currentEnd } = getCurrentState(
+        internalState,
+        props,
+      );
+      const newEndLocation = {
+        i: currentEnd.i + offsets.i,
+        j: Math.min(data[0].length - 1, Math.max(0, currentEnd.j + offsets.j)),
+      };
+      // Ensure start doesn't change during multi-select drag
+      setStateProxy({ start: currentStart, end: newEndLocation, editing: {} });
+    },
+    [internalState, props, data, setStateProxy],
+  );
+
+  const handleNavigate = useCallback(
+    (e, offsets, jumpRow) => {
+      if (offsets && (offsets.i || offsets.j)) {
+        const { start: currentStart } = getCurrentState(internalState, props);
+        const multiSelect = e.shiftKey && !jumpRow;
+
+        if (multiSelect) {
+          updateLocationMultipleCells(offsets);
+        } else {
+          const newLocation = searchForNextSelectablePos(
+            currentStart,
+            offsets,
+            jumpRow,
+          );
+          if (newLocation) {
+            updateLocationSingleCell(newLocation);
+          }
+        }
+        e.preventDefault();
+      }
+    },
+    [
+      internalState,
+      props,
+      updateLocationMultipleCells,
+      searchForNextSelectablePos,
+      updateLocationSingleCell,
+    ],
+  );
+
+  const handleKeyboardCellMovement = useCallback(
+    (e, commit = false) => {
+      const { start: currentStart, editing: currentEditing } = getCurrentState(
+        internalState,
+        props,
+      );
+      const isCurrentlyEditing = !isEmpty(currentEditing);
+      const currentCell = data[currentStart.i]?.[currentStart.j];
+
+      if (isCurrentlyEditing && !commit) {
+        return; // Don't move while actively editing unless committing
+      }
+
+      const keyCode = e.which || e.keyCode;
+      const hasComponent = currentCell?.component;
+
+      if (hasComponent && isCurrentlyEditing && !commit) {
+        // Let component handle navigation keys if needed, maybe?
+        // Original logic prevented default. Let's stick to that for now.
+        e.preventDefault();
+        return;
+      }
+
+      const offsets = { i: 0, j: 0 };
+      let shouldJumpRow = false;
+
+      switch (keyCode) {
+        case TAB_KEY:
+          offsets.j = e.shiftKey ? -1 : 1;
+          shouldJumpRow = true;
+          break;
+        case RIGHT_KEY:
+          offsets.j = 1;
+          break;
+        case LEFT_KEY:
+          offsets.j = -1;
+          break;
+        case UP_KEY:
+          offsets.i = -1;
+          break;
+        case DOWN_KEY:
+          offsets.i = 1;
+          break;
+        case ENTER_KEY:
+          if (commit) {
+            offsets.i = e.shiftKey ? -1 : 1;
+          }
+          break;
+        default:
+          return; // Not a navigation key
+      }
+
+      if (offsets.i || offsets.j) {
+        handleNavigate(e, offsets, shouldJumpRow);
+      }
+    },
+    [internalState, props, data, handleNavigate],
+  );
+
+  // This handler is attached to the main grid container
+  const handleGridKeyDown = useCallback(
+    e => {
+      if (e.isPropagationStopped && e.isPropagationStopped()) {
+        return;
+      }
+      const {
+        start: currentStart,
+        end: currentEnd,
+        editing: currentEditing,
+      } = getCurrentState(internalState, props);
+      const isCurrentlyEditing = !isEmpty(currentEditing);
+      const noCellsSelected = isEmpty(currentStart);
+      const ctrlKeyPressed = e.ctrlKey || e.metaKey;
+      const keyCode = e.which || e.keyCode;
+
+      if (noCellsSelected || ctrlKeyPressed) {
+        // Allow browser default behavior for copy/paste etc. if no selection or ctrl key
+        // Exception: If IE, handle clipboard manually always when focused
+        if (!/MSIE|Trident/.test(window.navigator.userAgent)) {
+          return;
+        }
+      }
+
+      if (!isCurrentlyEditing) {
+        // Handle navigation if not editing
+        handleKeyboardCellMovement(e);
+
+        const deleteKeysPressed =
+          keyCode === DELETE_KEY || keyCode === BACKSPACE_KEY;
+        if (deleteKeysPressed) {
+          e.preventDefault();
+          clearSelectedCells(currentStart, currentEnd);
+        }
+
+        const currentCell = data[currentStart.i]?.[currentStart.j];
+        if (currentCell && !currentCell.readOnly) {
+          const enterKeyPressed = keyCode === ENTER_KEY;
+          if (enterKeyPressed) {
+            setStateProxy({
+              editing: currentStart,
+              clear: {},
+              forceEdit: true,
+            });
+            e.preventDefault(); // Prevent default form submission or other actions
+          } else {
+            const numbersPressed = keyCode >= 48 && keyCode <= 57;
+            const lettersPressed = keyCode >= 65 && keyCode <= 90;
+            const latin1Supplement = keyCode >= 160 && keyCode <= 255;
+            const numPadKeysPressed = keyCode >= 96 && keyCode <= 105;
+            const equationKeysPressed = [
+              187 /* equal */, 189 /* substract */, 190 /* period */,
+              107 /* add */, 109 /* decimal point */, 110,
+            ].includes(keyCode);
+
+            if (
+              numbersPressed ||
+              numPadKeysPressed ||
+              lettersPressed ||
+              latin1Supplement ||
+              equationKeysPressed
+            ) {
+              // Start editing, clearing the cell value first
+              setStateProxy({
+                editing: currentStart,
+                clear: currentStart,
+                forceEdit: false,
+              });
+              // Don't prevent default here, let the input capture the key
+            }
+          }
+        }
+      } else {
+        // Is editing - let DataCell handle most keys via its onKeyDown
+        // Handle ESC, ENTER, TAB at the grid level for component editors
+        const isComponentEditor =
+          data[currentEditing.i]?.[currentEditing.j]?.component;
+        if (isComponentEditor) {
+          const offset = e.shiftKey ? -1 : 1;
+          let func = null;
+          if (keyCode === ESCAPE_KEY) {
+            func = onRevert;
+          } else if (keyCode === ENTER_KEY) {
+            func = () => handleNavigate(e, { i: offset, j: 0 });
+          } else if (keyCode === TAB_KEY) {
+            func = () => handleNavigate(e, { i: 0, j: offset }, true);
+          }
+
+          if (func) {
+            e.preventDefault();
+            // Timeout ensures the component editor processes the event first if needed
+            setTimeout(() => {
+              func();
+              if (dgDomRef.current) {
+                dgDomRef.current.focus({ preventScroll: true });
+              }
+            }, 1);
+          }
+        }
+      }
+    },
+    [
+      internalState,
+      props,
+      data,
+      handleKeyboardCellMovement,
+      clearSelectedCells,
+      setStateProxy,
+      onRevert,
+      handleNavigate,
+    ],
+  );
+
+  // Effect for managing document listeners
+  useEffect(() => {
+    // Add listeners when component mounts or potentially when state indicates interaction
+    // For simplicity, let's manage them more broadly, but be mindful of performance.
+    // Consider adding them only when `selecting` is true or based on focus.
+
+    // Cleanup function to remove listeners
+    return () => {
+      removeAllListeners();
+    };
+  }, [removeAllListeners]);
+
+  // Effect for componentDidUpdate logic (handling onSelect prop)
+  useEffect(() => {
+    // This replicates the onSelect call from the original componentDidUpdate
+    // It runs whenever internalState changes (specifically end changes)
+    // We only call onSelect if the component is uncontrolled.
+    if (!isSelectionControlled(props) && !isEmpty(internalState.end)) {
+      // Need to compare with previous internalState.end, which is tricky in hooks.
+      // A simpler approach might be to always call onSelect in uncontrolled mode when start/end changes internally.
+      // Let's assume the setStateProxy handles the controlled/uncontrolled distinction correctly.
+      // The original logic checked `!(end.i === prevEnd.i && end.j === prevEnd.j)`
+      // We can achieve similar check using a ref to store previous state or selectively calling onSelect.
+      // For now, relying on setStateProxy to call onSelect when needed for controlled.
+    }
+  }, [internalState.start, internalState.end, props, onSelect]); // Dependency on start/end
+
+  // Render logic
+  const isSelected = useCallback(
+    (i, j) => {
+      const { start: currentStart, end: currentEnd } = getCurrentState(
+        internalState,
+        props,
+      );
+      const posX = j >= currentStart.j && j <= currentEnd.j;
+      const negX = j <= currentStart.j && j >= currentEnd.j;
+      const posY = i >= currentStart.i && i <= currentEnd.i;
+      const negY = i <= currentStart.i && i >= currentEnd.i;
+      return (
+        (posX && posY) || (negX && posY) || (negX && negY) || (posX && negY)
+      );
+    },
+    [internalState, props],
+  );
+
+  const isSelectedRow = useCallback(
+    rowIndex => {
+      const { start: currentStart, end: currentEnd } = getCurrentState(
+        internalState,
+        props,
+      );
+      const startY = currentStart.i;
+      const endY = currentEnd.i;
+      return startY <= endY
+        ? rowIndex >= startY && rowIndex <= endY
+        : rowIndex <= startY && rowIndex >= endY;
+    },
+    [internalState, props],
+  );
+
+  const isCellEditing = useCallback(
+    (i, j) => {
+      return internalState.editing.i === i && internalState.editing.j === j;
+    },
+    [internalState.editing],
+  );
+
+  const isCellClearing = useCallback(
+    (i, j) => {
+      return internalState.clear.i === i && internalState.clear.j === j;
+    },
+    [internalState.clear],
+  );
+
+  const getSelectedCells = useCallback((currentData, startCell, endCell) => {
     let selected = [];
-    range(start.i, end.i).map(row => {
-      range(start.j, end.j).map(col => {
-        if (data[row] && data[row][col]) {
-          selected.push({ cell: data[row][col], row, col });
+    range(startCell.i, endCell.i).forEach(row => {
+      range(startCell.j, endCell.j).forEach(col => {
+        if (currentData[row]?.[col]) {
+          selected.push({ cell: currentData[row][col], row, col });
         }
       });
     });
     return selected;
-  }
+  }, []);
 
-  clearSelectedCells(start, end) {
-    const { data, onCellsChanged, onChange } = this.props;
-    const cells = this.getSelectedCells(data, start, end)
-      .filter(cell => !cell.cell.readOnly)
-      .map(cell => ({ ...cell, value: '' }));
-    if (onCellsChanged) {
-      onCellsChanged(cells);
-      this.onRevert();
-    } else if (onChange) {
-      // ugly solution brought to you by https://reactjs.org/docs/react-component.html#setstate
-      // setState in a loop is unreliable
-      setTimeout(() => {
-        cells.forEach(({ cell, row, col, value }) => {
-          onChange(cell, row, col, value);
-        });
-        this.onRevert();
-      }, 0);
-    }
-  }
-
-  updateLocationSingleCell(location) {
-    this._setState({
-      start: location,
-      end: location,
-      editing: {},
-    });
-  }
-
-  updateLocationMultipleCells(offsets) {
-    const { start, end } = this.getState();
-    const { data } = this.props;
-    const oldStartLocation = { i: start.i, j: start.j };
-    const newEndLocation = {
-      i: end.i + offsets.i,
-      j: Math.min(data[0].length - 1, Math.max(0, end.j + offsets.j)),
-    };
-    this._setState({
-      start: oldStartLocation,
-      end: newEndLocation,
-      editing: {},
-    });
-  }
-
-  searchForNextSelectablePos(isCellNavigable, data, start, offsets, jumpRow) {
-    const previousRow = location => ({
-      i: location.i - 1,
-      j: data[0].length - 1,
-    });
-    const nextRow = location => ({ i: location.i + 1, j: 0 });
-    const advanceOffset = location => ({
-      i: location.i + offsets.i,
-      j: location.j + offsets.j,
-    });
-    const isCellDefined = ({ i, j }) =>
-      data[i] && typeof data[i][j] !== 'undefined';
-
-    let newLocation = advanceOffset(start);
-
-    while (
-      isCellDefined(newLocation) &&
-      !isCellNavigable(
-        data[newLocation.i][newLocation.j],
-        newLocation.i,
-        newLocation.j,
-      )
-    ) {
-      newLocation = advanceOffset(newLocation);
-    }
-
-    if (!isCellDefined(newLocation)) {
-      if (!jumpRow) {
-        return null;
-      }
-      if (offsets.j < 0) {
-        newLocation = previousRow(newLocation);
-      } else {
-        newLocation = nextRow(newLocation);
-      }
-    }
-
-    if (
-      isCellDefined(newLocation) &&
-      !isCellNavigable(
-        data[newLocation.i][newLocation.j],
-        newLocation.i,
-        newLocation.j,
-      )
-    ) {
-      return this.searchForNextSelectablePos(
-        isCellNavigable,
-        data,
-        newLocation,
-        offsets,
-        jumpRow,
-      );
-    } else if (isCellDefined(newLocation)) {
-      return newLocation;
-    } else {
-      return null;
-    }
-  }
-
-  handleNavigate(e, offsets, jumpRow) {
-    if (offsets && (offsets.i || offsets.j)) {
-      const { data } = this.props;
-      const { start } = this.getState();
-
-      const multiSelect = e.shiftKey && !jumpRow;
-      const isCellNavigable = this.props.isCellNavigable
-        ? this.props.isCellNavigable
-        : () => true;
-
-      if (multiSelect) {
-        this.updateLocationMultipleCells(offsets);
-      } else {
-        const newLocation = this.searchForNextSelectablePos(
-          isCellNavigable,
-          data,
-          start,
-          offsets,
-          jumpRow,
-        );
-        if (newLocation) {
-          this.updateLocationSingleCell(newLocation);
-        }
-      }
-      e.preventDefault();
-    }
-  }
-
-  handleComponentKey(e) {
-    // handles keyboard events when editing components
-    const keyCode = e.which || e.keyCode;
-    if (![ENTER_KEY, ESCAPE_KEY, TAB_KEY].includes(keyCode)) {
-      return;
-    }
-    const { editing } = this.state;
-    const { data } = this.props;
-    const isEditing = !isEmpty(editing);
-    if (isEditing) {
-      const currentCell = data[editing.i][editing.j];
-      const offset = e.shiftKey ? -1 : 1;
-      if (currentCell && currentCell.component && !currentCell.forceComponent) {
-        e.preventDefault();
-        let func = this.onRevert; // ESCAPE_KEY
-        if (keyCode === ENTER_KEY) {
-          func = () => this.handleNavigate(e, { i: offset, j: 0 });
-        } else if (keyCode === TAB_KEY) {
-          func = () => this.handleNavigate(e, { i: 0, j: offset }, true);
-        }
-        // setTimeout makes sure that component is done handling the event before we take over
-        setTimeout(() => {
-          func();
-          this.dgDom && this.dgDom.focus({ preventScroll: true });
-        }, 1);
-      }
-    }
-  }
-
-  onContextMenu(evt, i, j) {
-    let cell = this.props.data[i][j];
-    if (this.props.onContextMenu) {
-      this.props.onContextMenu(evt, cell, i, j);
-    }
-  }
-
-  onDoubleClick(i, j) {
-    let cell = this.props.data[i][j];
-    if (!cell.readOnly) {
-      this._setState({ editing: { i: i, j: j }, forceEdit: true, clear: {} });
-    }
-  }
-
-  onMouseDown(i, j, e) {
-    const isNowEditingSameCell =
-      !isEmpty(this.state.editing) &&
-      this.state.editing.i === i &&
-      this.state.editing.j === j;
-    let editing =
-      isEmpty(this.state.editing) ||
-      this.state.editing.i !== i ||
-      this.state.editing.j !== j
-        ? {}
-        : this.state.editing;
-
-    this._setState({
-      selecting: !isNowEditingSameCell,
-      start: e.shiftKey ? this.getState().start : { i, j },
-      end: { i, j },
-      editing: editing,
-      forceEdit: !!isNowEditingSameCell,
-    });
-
-    var ua = window.navigator.userAgent;
-    var isIE = /MSIE|Trident/.test(ua);
-    // Listen for Ctrl + V in case of IE
-    if (isIE) {
-      document.addEventListener('keydown', this.handleIEClipboardEvents);
-    }
-
-    // Keep listening to mouse if user releases the mouse (dragging outside)
-    document.addEventListener('mouseup', this.onMouseUp);
-    // Listen for any outside mouse clicks
-    document.addEventListener('mousedown', this.pageClick);
-
-    // Cut, copy and paste event handlers
-    document.addEventListener('cut', this.handleCut);
-    document.addEventListener('copy', this.handleCopy);
-    document.addEventListener('paste', this.handlePaste);
-  }
-
-  onMouseOver(i, j) {
-    if (this.state.selecting && isEmpty(this.state.editing)) {
-      this._setState({ end: { i, j } });
-    }
-  }
-
-  onMouseUp() {
-    this._setState({ selecting: false });
-    document.removeEventListener('mouseup', this.onMouseUp);
-  }
-
-  onChange(row, col, value) {
-    const { onChange, onCellsChanged, data } = this.props;
-    if (onCellsChanged) {
-      onCellsChanged([{ cell: data[row][col], row, col, value }]);
-    } else if (onChange) {
-      onChange(data[row][col], row, col, value);
-    }
-    this.onRevert();
-  }
-
-  onRevert() {
-    this._setState({ editing: {} });
-    // setTimeout makes sure that component is done handling the new state before we take over
-    setTimeout(() => {
-      this.dgDom && this.dgDom.focus({ preventScroll: true });
-    }, 1);
-  }
-
-  componentDidUpdate(prevProps, prevState) {
-    let { start, end } = this.state;
-    let prevEnd = prevState.end;
-    if (
-      !isEmpty(end) &&
-      !(end.i === prevEnd.i && end.j === prevEnd.j) &&
-      !this.isSelectionControlled()
-    ) {
-      this.props.onSelect && this.props.onSelect({ start, end });
-    }
-  }
-
-  isSelectedRow(rowIndex) {
-    const { start, end } = this.getState();
-    const startY = start.i;
-    const endY = end.i;
-    if (startY <= endY) {
-      return rowIndex >= startY && rowIndex <= endY;
-    } else {
-      return rowIndex <= startY && rowIndex >= endY;
-    }
-  }
-
-  isSelected(i, j) {
-    const { start, end } = this.getState();
-    const posX = j >= start.j && j <= end.j;
-    const negX = j <= start.j && j >= end.j;
-    const posY = i >= start.i && i <= end.i;
-    const negY = i <= start.i && i >= end.i;
-
-    return (posX && posY) || (negX && posY) || (negX && negY) || (posX && negY);
-  }
-
-  isEditing(i, j) {
-    return this.state.editing.i === i && this.state.editing.j === j;
-  }
-
-  isClearing(i, j) {
-    return this.state.clear.i === i && this.state.clear.j === j;
-  }
-
-  render() {
-    const {
-      sheetRenderer: SheetRenderer,
-      rowRenderer: RowRenderer,
-      cellRenderer,
-      dataRenderer,
-      valueRenderer,
-      dataEditor,
-      valueViewer,
-      attributesRenderer,
-      className,
-      overflow,
-      data,
-      keyFn,
-    } = this.props;
-    const { forceEdit } = this.state;
-    return (
-      <span
-        ref={r => {
-          this.dgDom = r;
-        }}
-        tabIndex="0"
-        className="data-grid-container"
-        onKeyDown={this.handleKey}
+  return (
+    <span
+      ref={dgDomRef}
+      tabIndex={0}
+      className="data-grid-container"
+      onKeyDown={handleGridKeyDown} // Use the grid keydown handler
+    >
+      <SheetRenderer
+        data={data}
+        className={['data-grid', className, overflow].filter(Boolean).join(' ')}
       >
-        <SheetRenderer
-          data={data}
-          className={['data-grid', className, overflow]
-            .filter(a => a)
-            .join(' ')}
-        >
-          {data.map((row, i) => (
-            <RowRenderer
-              key={keyFn ? keyFn(i) : i}
-              row={i}
-              cells={row}
-              selected={this.isSelectedRow(i)}
-            >
-              {row.map((cell, j) => {
-                const isEditing = this.isEditing(i, j);
-                return (
-                  <DataCell
-                    key={cell.key ? cell.key : `${i}-${j}`}
-                    row={i}
-                    col={j}
-                    cell={cell}
-                    forceEdit={false}
-                    onMouseDown={this.onMouseDown}
-                    onMouseOver={this.onMouseOver}
-                    onDoubleClick={this.onDoubleClick}
-                    onContextMenu={this.onContextMenu}
-                    onChange={this.onChange}
-                    onRevert={this.onRevert}
-                    onNavigate={this.handleKeyboardCellMovement}
-                    onKey={this.handleKey}
-                    selected={this.isSelected(i, j)}
-                    editing={isEditing}
-                    clearing={this.isClearing(i, j)}
-                    attributesRenderer={attributesRenderer}
-                    cellRenderer={cellRenderer}
-                    valueRenderer={valueRenderer}
-                    dataRenderer={dataRenderer}
-                    valueViewer={valueViewer}
-                    dataEditor={dataEditor}
-                    {...(isEditing
-                      ? {
-                          forceEdit,
-                        }
-                      : {})}
-                  />
-                );
-              })}
-            </RowRenderer>
-          ))}
-        </SheetRenderer>
-      </span>
-    );
-  }
-}
+        {data.map((row, i) => (
+          <RowRenderer
+            key={keyFn ? keyFn(i) : i}
+            row={i}
+            cells={row}
+            selected={isSelectedRow(i)}
+          >
+            {row.map((cell, j) => {
+              const editingStatus = isCellEditing(i, j);
+              const clearingStatus = isCellClearing(i, j);
+              const selectionStatus = isSelected(i, j);
+
+              return (
+                <DataCell
+                  key={cell.key ? cell.key : `${i}-${j}`}
+                  row={i}
+                  col={j}
+                  cell={cell}
+                  // forceEdit={editingStatus && forceEdit} // Pass internal forceEdit state
+                  selected={selectionStatus}
+                  editing={editingStatus}
+                  clearing={clearingStatus}
+                  onMouseDown={handleCellMouseDown}
+                  onMouseOver={handleCellMouseOver}
+                  onDoubleClick={handleCellDoubleClick}
+                  onContextMenu={handleCellContextMenu}
+                  onChange={handleCellChange}
+                  onRevert={onRevert} // Pass the memoized revert handler
+                  onNavigate={handleKeyboardCellMovement} // Pass the memoized movement handler
+                  // onKey prop seems unused in DataCell after refactor? handleGridKeyDown handles keys.
+                  attributesRenderer={attributesRenderer}
+                  cellRenderer={cellRenderer}
+                  valueRenderer={valueRenderer}
+                  dataRenderer={dataRenderer}
+                  valueViewer={valueViewer}
+                  dataEditor={dataEditor}
+                  // Pass forceEdit only when editing this cell
+                  {...(editingStatus ? { forceEdit } : {})}
+                />
+              );
+            })}
+          </RowRenderer>
+        ))}
+      </SheetRenderer>
+    </span>
+  );
+});
 
 DataSheet.propTypes = {
   data: PropTypes.array.isRequired,
@@ -752,15 +919,16 @@ DataSheet.propTypes = {
   }),
   valueRenderer: PropTypes.func.isRequired,
   dataRenderer: PropTypes.func,
-  sheetRenderer: PropTypes.func.isRequired,
-  rowRenderer: PropTypes.func.isRequired,
-  cellRenderer: PropTypes.func.isRequired,
+  sheetRenderer: PropTypes.func, // Updated: Removed isRequired, default provided
+  rowRenderer: PropTypes.func, // Updated: Removed isRequired, default provided
+  cellRenderer: PropTypes.func, // Updated: Removed isRequired, default provided
   valueViewer: PropTypes.func,
   dataEditor: PropTypes.func,
   parsePaste: PropTypes.func,
   attributesRenderer: PropTypes.func,
   keyFn: PropTypes.func,
   handleCopy: PropTypes.func,
+  onPaste: PropTypes.func, // Added onPaste prop type
   editModeChanged: PropTypes.func,
 };
 
@@ -770,4 +938,11 @@ DataSheet.defaultProps = {
   cellRenderer: Cell,
   valueViewer: ValueViewer,
   dataEditor: DataEditor,
+  parsePaste: defaultParsePaste, // Add default for parsePaste
+  isCellNavigable: () => true, // Add default for isCellNavigable
+  disablePageClick: false, // Add default
 };
+
+DataSheet.displayName = 'DataSheet';
+
+export default DataSheet;
