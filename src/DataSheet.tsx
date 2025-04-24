@@ -822,17 +822,13 @@ const DataSheet: React.FC<DataSheetProps> = memo(props => {
   );
 
   const handleCellContextMenu = useCallback(
-    (
-      e: React.MouseEvent<HTMLTableCellElement>,
-      cell: CellShape,
-      row: number,
-      col: number,
-    ) => {
-      if (onContextMenu) {
+    (e: React.MouseEvent<HTMLTableCellElement>, row: number, col: number) => {
+      const cell = data[row]?.[col];
+      if (onContextMenu && cell !== undefined) {
         onContextMenu(e, cell, row, col);
       }
     },
-    [onContextMenu],
+    [onContextMenu, data],
   );
 
   const handleCellChange = useCallback(
@@ -932,7 +928,7 @@ const DataSheet: React.FC<DataSheetProps> = memo(props => {
                   onMouseDown={handleCellMouseDown}
                   onMouseOver={handleCellMouseOver}
                   onDoubleClick={handleCellDoubleClick}
-                  onContextMenu={e => handleCellContextMenu(e, cell, i, j)}
+                  onContextMenu={handleCellContextMenu}
                   onChange={handleCellChange}
                   onRevert={handleCellRevert}
                 />
