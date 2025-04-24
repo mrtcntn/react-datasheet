@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<coverage generated="1745517256064" clover="3.2.0">
-  <project timestamp="1745517256064" name="All files">
+<coverage generated="1745518059415" clover="3.2.0">
+  <project timestamp="1745518059415" name="All files">
     <metrics statements="1592" coveredstatements="1070" conditionals="152" coveredconditionals="116" methods="31" coveredmethods="23" elements="1775" coveredelements="1209" complexity="0" loc="1592" ncloc="1592" packages="1" files="9" classes="9"/>
     <file name="Cell.tsx" path="/Users/mertcanatan/Developer/react-datasheet/src/Cell.tsx">
       <metrics statements="121" coveredstatements="117" conditionals="13" coveredconditionals="9" methods="7" coveredmethods="6"/>

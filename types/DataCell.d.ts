@@ -1,6 +1,6 @@
 import React from 'react';
 import { CellShape } from './CellShape';
-interface DataCellProps {
+export interface DataCellProps {
     row: number;
     col: number;
     cell: CellShape;

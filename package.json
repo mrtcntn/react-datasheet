@@ -21,7 +21,7 @@
     "clean": "rimraf dist lib coverage",
     "build:types": "tsc --emitDeclarationOnly --outDir types",
     "build:js": "babel ./src --out-dir ./lib --extensions .js,.jsx,.ts,.tsx --ignore \"**/*.test.js,**/*.test.ts,**/*.test.tsx\"",
-    "build": "npm run clean && npm run build:types && npm run build:js && shx cp src/react-datasheet.module.css lib",
+    "build": "npm run clean && npm run build:types && npm run build:js && shx cp src/react-datasheet.css lib",
     "build:watch": "watch 'npm run build' ./src",
     "prepublishOnly": "npm run build",
     "coverage": "jest --coverage",

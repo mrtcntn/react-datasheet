@@ -8,7 +8,7 @@ type Selection = {
     end: CellLocation;
 };
 declare const range: (start: number, end: number) => number[];
-interface DataSheetProps<T = any> {
+export interface DataSheetProps<T = any> {
     data: T[][];
     className?: string;
     overflow?: 'wrap' | 'nowrap' | 'clip';
